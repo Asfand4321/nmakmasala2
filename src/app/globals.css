@@ -1,0 +1,47 @@
+/* Tailwind v4 style */
+@import "tailwindcss";
+
+/* Theme tokens (custom colors, fonts, shadows, radii) */
+@theme {
+  --color-paper: #F1E7DA;
+  --color-terracotta: #C46A42;
+  --color-terracotta-600: #A65736;
+  --color-olive: #557153;
+  --color-taupe: #D0B49F;
+  --color-sand: #F5E6CA;
+  --color-charcoal: #2B2B2B;
+
+  --font-heading: "Georgia", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --shadow-soft: 0 4px 20px rgba(0,0,0,0.08);
+  --radius-2xl: 1.25rem;
+}
+
+/* Base */
+:root { color-scheme: light; }
+html { scroll-behavior: smooth; }
+body { @apply bg-paper text-charcoal font-sans antialiased; }
+
+/* Typography helpers */
+.h1 { @apply font-heading text-3xl sm:text-4xl; }
+.h2 { @apply font-heading text-2xl sm:text-3xl; }
+.muted { @apply opacity-80; }
+
+/* Layout */
+.container-nm { @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8; }
+
+/* Surfaces */
+.card { @apply bg-paper rounded-2xl shadow-soft border border-taupe/40; }
+
+/* Buttons */
+.btn { @apply inline-flex items-center justify-center rounded-full px-5 py-3 font-medium transition; }
+.btn-primary { @apply bg-terracotta text-white hover:bg-terracotta-600; }
+.btn-outline { @apply border border-olive text-olive hover:bg-olive hover:text-white; }
+
+/* Chips / badges */
+.chip { @apply inline-flex items-center rounded-full px-3 py-1.5 bg-sand text-charcoal border border-taupe; }
+
+/* Forms */
+.input { @apply w-full rounded-xl border border-taupe/60 bg-white/80 px-4 py-3 outline-none focus:ring-2 focus:ring-olive/40 focus:border-olive; }
+.label { @apply block text-sm mb-1; }
