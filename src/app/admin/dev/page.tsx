@@ -1,132 +1,232 @@
 'use client'
 
-import { useState } from 'react'
-import { useAdminOrders, AdminOrder } from '@/components/admin/useAdminOrders'
-import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
 import Card from '@/components/Card'
-import Modal from '@/components/admin/Modal'
+import Modal from '@/components/Modal'
 
-function fmt(ts: number) {
-  const d = new Date(ts)
-  return d.toLocaleString()
+/** ---------- Types ---------- */
+type Status = 'placed' | 'preparing' | 'out_for_delivery' | 'delivered' | 'cancelled'
+
+type OrderItem = {
+  name: string
+  qty: number
+  price: number
 }
-function money(n: number) { return `Rs ${n}` }
 
-export default function AdminDevPage() {
-  const { orders, add, update, remove, seedIfEmpty } = useAdminOrders()
+type AdminOrder = {
+  id: string
+  items: OrderItem[]
+  total: number
+  status: Status
+  customer: { phone: string }
+  address: string
+  createdAt: string
+  note?: string
+  source: 'meal' | 'plan'
+}
 
-  // MODALS STATE
+/** ---------- Utils (inline helpers) ---------- */
+function money(n: number) {
+  return `Rs ${n.toLocaleString('en-PK')}`
+}
+function fmt(iso: string) {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleString()
+  } catch {
+    return iso
+  }
+}
+
+/** ---------- LocalStorage helpers ---------- */
+const KEY = 'nm_admin_orders'
+
+function loadOrders(): AdminOrder[] {
+  try {
+    const raw = localStorage.getItem(KEY)
+    const arr = raw ? (JSON.parse(raw) as AdminOrder[]) : []
+    // filter: sirf “meals waale taste orders” show karo (plans alag page pe)
+    return arr.filter(o => o.source === 'meal')
+  } catch {
+    return []
+  }
+}
+
+function saveOrders(mealOrders: AdminOrder[]) {
+  try {
+    // storage ke andar “non-meal” orders ko preserve rakhna (e.g. plan subscriptions)
+    const raw = localStorage.getItem(KEY)
+    const all = raw ? (JSON.parse(raw) as AdminOrder[]) : []
+    const nonMeals = all.filter(o => o.source !== 'meal')
+    const next = [...mealOrders, ...nonMeals]
+    localStorage.setItem(KEY, JSON.stringify(next))
+  } catch {}
+}
+
+/** ---------- Hook: useAdminMealOrders ---------- */
+function useAdminMealOrders() {
+  const [orders, setOrders] = useState<AdminOrder[]>([])
+
+  useEffect(() => {
+    setOrders(loadOrders())
+  }, [])
+
+  const update = (id: string, patch: Partial<AdminOrder>) => {
+    setOrders(prev => {
+      const next = prev.map(o => (o.id === id ? { ...o, ...patch } : o))
+      saveOrders(next)
+      return next
+    })
+  }
+
+  const remove = (id: string) => {
+    setOrders(prev => {
+      const next = prev.filter(o => o.id !== id)
+      saveOrders(next)
+      return next
+    })
+  }
+
+  const clearAllMeals = () => {
+    setOrders(() => {
+      const next: AdminOrder[] = []
+      saveOrders(next)
+      return next
+    })
+  }
+
+  return { orders, update, remove, clearAllMeals, setOrders }
+}
+
+/** ---------- Page Component ---------- */
+export default function AdminOrdersPage() {
+  const { orders, update, remove, clearAllMeals } = useAdminMealOrders()
+
+  // UI state (cancel/note modals)
   const [cancelId, setCancelId] = useState<string | null>(null)
   const [cancelReason, setCancelReason] = useState('')
   const [editId, setEditId] = useState<string | null>(null)
   const [note, setNote] = useState('')
 
-  const addRandom = () => {
-    const items = [
-      { name: 'Biryani', qty: 1, price: 420 },
-      { name: 'Qeema + Roti', qty: 1, price: 390 },
-      { name: 'Daal + Roti', qty: 1, price: 250 },
-    ]
-    const picked = items[Math.floor(Math.random()*items.length)]
-    const cartTotal = picked.qty * picked.price
-    const rec: Omit<AdminOrder,'id'|'createdAt'> = {
-      status: 'placed',
-      customer: { phone: localStorage.getItem('nm_user_phone') || '0300XXXXXXX' },
-      address: 'Demo Address, Lahore',
-      windows: [
-        { sh:'12',sm:'00',sap:'PM', eh:'01',em:'00',eap:'PM' },
-        null
-      ],
-      items: [picked],
-      cartTotal,
-      total: 4000 + cartTotal,
-      plan: { planId:'weekly-1', includedNonVeg:3, chosenNonVeg:2, extraNonVeg:0, planTotal:4000 },
-      note: ''
-    }
-    add(rec)
-  }
+  const count = orders.length
+  const totals = useMemo(
+    () => ({
+      placed: orders.filter(o => o.status === 'placed').length,
+      preparing: orders.filter(o => o.status === 'preparing').length,
+      out: orders.filter(o => o.status === 'out_for_delivery').length,
+      delivered: orders.filter(o => o.status === 'delivered').length,
+      cancelled: orders.filter(o => o.status === 'cancelled').length,
+      revenue: orders
+        .filter(o => o.status === 'delivered')
+        .reduce((s, o) => s + o.total, 0),
+    }),
+    [orders]
+  )
 
-  const clearAll = () => {
-    orders.forEach(o => remove(o.id))
+  function openCancel(id: string) {
+    setCancelId(id)
+    setCancelReason('')
   }
-
-  // OPEN/CLOSE HELPERS
-  const openCancel = (id: string) => { setCancelId(id); setCancelReason(''); }
-  const confirmCancel = () => {
+  function confirmCancel() {
     if (!cancelId) return
-    update(cancelId, { status: 'cancelled', note: cancelReason || 'Cancelled by admin' })
+    const prev = orders.find(o => o.id === cancelId)
+    const newNote = [prev?.note, cancelReason].filter(Boolean).join(' | ')
+    update(cancelId, { status: 'cancelled', note: newNote })
     setCancelId(null); setCancelReason('')
   }
-
-  const openEditNote = (id: string, currentNote?: string) => {
-    setEditId(id); setNote(currentNote || '')
+  function openEditNote(id: string, existing?: string) {
+    setEditId(id)
+    setNote(existing || '')
   }
-  const saveNote = () => {
+  function saveNote() {
     if (!editId) return
     update(editId, { note })
     setEditId(null)
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="h1">Admin Dev — Orders Debug</h1>
-        <Link href="/admin" className="btn btn-outline">↩ Back to Admin</Link>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="h1 m-0">Admin · Orders (Meals only)</h1>
+          <p className="muted">
+            Ye page sirf <span className="font-medium">meals wale taste orders</span> dikhata hai.
+            Plans/subscriptions <span className="font-medium">/admin/subscriptions</span> par hain.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <span className="chip">Total: {count}</span>
+          <span className="chip">Placed: {totals.placed}</span>
+          <span className="chip">Prep: {totals.preparing}</span>
+          <span className="chip">Out: {totals.out}</span>
+          <span className="chip">Delivered: {totals.delivered}</span>
+          <span className="chip">Cancelled: {totals.cancelled}</span>
+          <span className="chip">Revenue: {money(totals.revenue)}</span>
+        </div>
       </div>
 
-      <div className="flex gap-2 flex-wrap">
-        <button className="btn btn-primary" onClick={seedIfEmpty}>Seed sample orders</button>
-        <button className="btn btn-outline" onClick={addRandom}>Add random order</button>
-        <button className="btn btn-outline" onClick={clearAll}>Clear all</button>
+      {/* Actions */}
+      <div className="flex gap-2">
+        <button
+          className="btn btn-outline"
+          onClick={() => {
+            if (confirm('Clear ALL meal orders? This cannot be undone.')) clearAllMeals()
+          }}
+        >
+          Clear Meal Orders
+        </button>
+        <a className="btn btn-outline" href="/admin/dev">Dev Tools</a>
       </div>
 
-      <Card className="p-3">
-        <div className="font-heading">Total orders: {orders.length}</div>
-      </Card>
-
-      <div className="space-y-2">
+      {/* List */}
+      <div className="space-y-3">
         {orders.map(o => (
           <Card key={o.id} className="p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium truncate">{o.id} • {o.customer.phone || 'N/A'}</div>
                 <div className="muted text-sm">{fmt(o.createdAt)} • {o.address}</div>
-                <div className="muted text-sm">Items: {o.items.map(i=>`${i.name}×${i.qty}`).join(', ')}</div>
+                <div className="muted text-sm">
+                  Items: {o.items.map(i => `${i.name}×${i.qty}`).join(', ')}
+                </div>
                 {o.note ? <div className="muted text-sm">Note: {o.note}</div> : null}
               </div>
               <div className="text-right">
-                <div className="chip capitalize">{o.status.replaceAll('_',' ')}</div>
+                <div className="chip capitalize">{o.status.replaceAll('_', ' ')}</div>
                 <div className="font-heading">{money(o.total)}</div>
               </div>
             </div>
 
             <div className="flex gap-2 mt-3 flex-wrap">
-              <button className="btn btn-outline" onClick={()=>update(o.id, { status:'preparing' })}>Set Preparing</button>
-              <button className="btn btn-outline" onClick={()=>update(o.id, { status:'out_for_delivery' })}>Set Out</button>
-              <button className="btn btn-outline" onClick={()=>update(o.id, { status:'delivered' })}>Set Delivered</button>
-              <button className="btn btn-outline" onClick={()=>openCancel(o.id)}>Cancel…</button>
-              <button className="btn btn-outline" onClick={()=>openEditNote(o.id, o.note)}>Edit note…</button>
-              <button className="btn btn-outline" onClick={()=>remove(o.id)}>Delete</button>
+              <button className="btn btn-outline" onClick={() => update(o.id, { status: 'preparing' })}>Set Preparing</button>
+              <button className="btn btn-outline" onClick={() => update(o.id, { status: 'out_for_delivery' })}>Set Out</button>
+              <button className="btn btn-outline" onClick={() => update(o.id, { status: 'delivered' })}>Set Delivered</button>
+              <button className="btn btn-outline" onClick={() => openCancel(o.id)}>Cancel…</button>
+              <button className="btn btn-outline" onClick={() => openEditNote(o.id, o.note)}>Edit note…</button>
+              <button className="btn btn-outline" onClick={() => remove(o.id)}>Delete</button>
             </div>
           </Card>
         ))}
+        {orders.length === 0 && (
+          <Card className="p-6 muted text-center">No meal orders yet.</Card>
+        )}
       </div>
 
       {/* CANCEL MODAL */}
       <Modal
         open={!!cancelId}
         title="Cancel order"
-        onClose={()=>{ setCancelId(null); setCancelReason('') }}
+        onClose={() => { setCancelId(null); setCancelReason('') }}
       >
         <p className="muted mb-2">Write a brief reason. This will be saved to the order note.</p>
         <textarea
           className="input w-full h-28"
           placeholder="e.g. Customer unreachable / Address not found"
           value={cancelReason}
-          onChange={(e)=>setCancelReason(e.target.value)}
+          onChange={(e) => setCancelReason(e.target.value)}
         />
         <div className="mt-4 flex justify-end gap-2">
-          <button className="btn btn-outline" onClick={()=>{ setCancelId(null); setCancelReason('') }}>Close</button>
+          <button className="btn btn-outline" onClick={() => { setCancelId(null); setCancelReason('') }}>Close</button>
           <button className="btn btn-primary" onClick={confirmCancel}>Confirm cancel</button>
         </div>
       </Modal>
@@ -135,16 +235,16 @@ export default function AdminDevPage() {
       <Modal
         open={!!editId}
         title="Edit internal note"
-        onClose={()=>setEditId(null)}
+        onClose={() => setEditId(null)}
       >
         <textarea
           className="input w-full h-28"
           placeholder="Internal note…"
           value={note}
-          onChange={(e)=>setNote(e.target.value)}
+          onChange={(e) => setNote(e.target.value)}
         />
         <div className="mt-4 flex justify-end gap-2">
-          <button className="btn btn-outline" onClick={()=>setEditId(null)}>Close</button>
+          <button className="btn btn-outline" onClick={() => setEditId(null)}>Close</button>
           <button className="btn btn-primary" onClick={saveNote}>Save</button>
         </div>
       </Modal>
